@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+*.fai
+*.egg-info/
+.pytest_cache/
+mini.site.tsv
