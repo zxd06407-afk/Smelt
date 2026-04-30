@@ -16,22 +16,24 @@ from pathlib import Path
 
 random.seed(42)
 
-CHROM_SIZES = {"chrA": 100_000, "chrB": 50_000}
+CHROM_SIZES = {"chrA": 200_000, "chrB": 100_000}
 SAMPLE_GROUPS = {
     "group1": ["sample_1", "sample_2"],
     "group2": ["sample_3", "sample_4"],
 }
 
 # Pre-defined DMRs: (chr, start, end, context, delta, direction)
+# Each DMR is 8000bp = 4 full 2000bp windows, start aligned to 500bp step.
+# Deltas from strong (0.7) to subtle (0.2). Sites every 50bp = ~40 sites/window.
 EMBEDDED_DMRS = [
-    ("chrA", 10000, 14000, "CpG", 0.8, "hyper"),
-    ("chrA", 50000, 52000, "CpG", 0.6, "hypo"),
-    ("chrA", 70000, 72000, "CpG", 0.4, "hyper"),
-    ("chrA", 85000, 87000, "CpG", 0.25, "hypo"),
-    ("chrA", 90000, 92000, "CpG", 0.15, "hyper"),
-    ("chrB", 10000, 14000, "CHH", 0.7, "hyper"),
-    ("chrB", 25000, 29000, "CHH", 0.5, "hypo"),
-    ("chrB", 40000, 42000, "CHG", 0.55, "hyper"),
+    ("chrA", 10000, 18000, "CpG", 0.7, "hyper"),
+    ("chrA", 30000, 38000, "CpG", 0.5, "hypo"),
+    ("chrA", 50000, 58000, "CpG", 0.4, "hyper"),
+    ("chrA", 70000, 78000, "CpG", 0.3, "hypo"),
+    ("chrA", 90000, 98000, "CpG", 0.2, "hyper"),
+    ("chrB", 10000, 18000, "CHH", 0.6, "hyper"),
+    ("chrB", 30000, 38000, "CHH", 0.5, "hypo"),
+    ("chrB", 50000, 58000, "CHG", 0.5, "hyper"),
 ]
 
 BASES = ["A", "C", "G", "T"]
@@ -45,21 +47,40 @@ def _is_in_dmr(chrom, pos, context):
     return None
 
 
-def generate_fasta(output_dir):
-    """Generate a single multi-chromosome FASTA."""
+def generate_fasta(output_dir, shared_sites):
+    """Generate FASTA where context matches _determine_context at each site position.
+
+    Only cytosine site positions have the C + downstream pattern set.
+    Other positions are filled with non-C bases to avoid spurious context hits.
+    """
+    # Build set of site positions for fast lookup
+    site_positions = set()
+    for chrom, pos_1based, ctx in shared_sites:
+        site_positions.add((chrom, pos_1based))
+
     path = output_dir / "genome.fa"
     with open(path, "w") as f:
         for chrom, size in CHROM_SIZES.items():
+            seq = [random.choice(["A", "G", "T"]) for _ in range(size)]  # non-C default
+            for pos_1based in range(1, size + 1):
+                if (chrom, pos_1based) in site_positions:
+                    ctx = _determine_context(chrom, pos_1based)
+                    idx = pos_1based - 1
+                    seq[idx] = "C"
+                    if ctx == "CpG":
+                        if idx + 1 < size:
+                            seq[idx + 1] = "G"
+                    elif ctx == "CHG":
+                        if idx + 1 < size:
+                            seq[idx + 1] = random.choice(["A", "C", "T"])
+                        if idx + 2 < size:
+                            seq[idx + 2] = "G"
+                    else:  # CHH
+                        if idx + 1 < size:
+                            seq[idx + 1] = random.choice(["A", "C", "T"])
+                        if idx + 2 < size:
+                            seq[idx + 2] = random.choice(["A", "C", "T"])
             f.write(f">{chrom}\n")
-            seq = []
-            for i in range(size):
-                # Inject CpG, CHH, CHG patterns
-                if i % 30 < 10:
-                    seq.append("C")
-                elif i % 30 < 15:
-                    seq.append("G")
-                else:
-                    seq.append(random.choice(BASES))
             for i in range(0, size, 60):
                 f.write("".join(seq[i:i+60]) + "\n")
     print(f"Wrote {path} ({sum(CHROM_SIZES.values())} bp)")
@@ -76,41 +97,34 @@ def _determine_context(chrom, pos):
         return "CHG"
 
 
-def generate_cov_files(output_dir):
+def generate_cov_files(output_dir, shared_sites):
     """Generate BISMARK coverage files with embedded DMRs.
 
     All samples share the same cytosine positions (fixed step per chromosome).
     Variation comes from depth, methylation ratio, and group-specific DMR effects.
     """
-    # Build shared position list with pre-determined contexts
-    shared_sites = []
-    for chrom, size in CHROM_SIZES.items():
-        step = 100  # fixed step so all samples have sites at identical positions
-        for pos in range(1, size + 1, step):
-            ctx = _determine_context(chrom, pos)
-            shared_sites.append((chrom, pos, ctx))
-    print(f"Shared site template: {len(shared_sites)} positions across all chromosomes")
 
     for group, samples in SAMPLE_GROUPS.items():
         for sample in samples:
             rows = []
             for chrom, pos, ctx in shared_sites:
-                base_ratio = 0.8 if ctx == "CpG" else (0.1 if ctx == "CHH" else 0.05)
-                # Add biological variation: random perturbation around base_ratio
-                base_ratio += random.gauss(0, 0.05)
-                base_ratio = max(0, min(1, base_ratio))
+                # Lower baselines to leave room for both hyper and hypo DMR effects
+                base_ratio = 0.5 if ctx == "CpG" else (0.3 if ctx == "CHH" else 0.3)
+                base_ratio += random.gauss(0, 0.02)
+                base_ratio = max(0.05, min(0.95, base_ratio))
 
-                depth = random.randint(10, 40)
+                depth = random.randint(15, 35)
                 meth = int(depth * base_ratio)
 
-                # Apply DMR effect for group2 samples
                 dmr = _is_in_dmr(chrom, pos, ctx)
                 if dmr and group == "group2":
                     delta, direction = dmr
                     if direction == "hyper":
-                        meth += int(depth * delta * 0.8)
+                        dmr_ratio = base_ratio + delta
                     else:
-                        meth -= int(depth * delta * 0.8)
+                        dmr_ratio = base_ratio - delta
+                    dmr_ratio = max(0.05, min(0.95, dmr_ratio))
+                    meth = int(depth * dmr_ratio)
                 meth = max(0, min(depth, meth))
                 unmet = depth - meth
                 pct = meth / depth * 100
@@ -155,15 +169,26 @@ def generate_gtf(output_dir):
 
 
 def generate_bed(output_dir):
-    """Generate a BED with 5 custom intervals."""
+    """Generate a BED with 5 custom intervals (in non-DMR regions)."""
     path = output_dir / "test_regions.bed"
-    intervals = [(1, "chrA", 15000, 25000), (2, "chrA", 40000, 48000),
-                 (3, "chrA", 60000, 68000), (4, "chrB", 5000, 15000),
-                 (5, "chrB", 30000, 38000)]
+    intervals = [(1, "chrA", 20000, 28000), (2, "chrA", 40000, 48000),
+                 (3, "chrA", 80000, 88000), (4, "chrB", 20000, 28000),
+                 (5, "chrB", 40000, 48000)]
     with open(path, "w") as f:
         for idx, chrom, start, end in intervals:
             f.write(f"{chrom}\t{start}\t{end}\tregion_{idx}\n")
     print(f"Wrote {path}")
+
+
+def _build_shared_sites():
+    """Build the shared site template — used by both FASTA and cov generation."""
+    sites = []
+    for chrom, size in CHROM_SIZES.items():
+        step = 50
+        for pos in range(1, size + 1, step):
+            ctx = _determine_context(chrom, pos)
+            sites.append((chrom, pos, ctx))
+    return sites
 
 
 if __name__ == "__main__":
@@ -172,8 +197,10 @@ if __name__ == "__main__":
     args = p.parse_args()
     out = Path(args.outdir)
     out.mkdir(parents=True, exist_ok=True)
-    generate_fasta(out)
-    generate_cov_files(out)
+    shared_sites = _build_shared_sites()
+    print(f"Shared site template: {len(shared_sites)} positions across all chromosomes")
+    generate_fasta(out, shared_sites)
+    generate_cov_files(out, shared_sites)
     generate_gtf(out)
     generate_bed(out)
     print("Done.")

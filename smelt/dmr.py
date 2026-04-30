@@ -143,11 +143,12 @@ def call_dmr(window_df, sample_groups, group1, group2,
     result_df = pd.DataFrame(results)
 
     if fdr_by_context:
-        q_values = []
+        result_df["q_value"] = np.nan
         for ctx in result_df["context"].unique():
             mask = result_df["context"] == ctx
-            q_values.extend(_bh_correction(result_df.loc[mask, "p_value"].values))
-        result_df["q_value"] = q_values
+            result_df.loc[mask, "q_value"] = _bh_correction(
+                result_df.loc[mask, "p_value"].values
+            )
     else:
         result_df["q_value"] = _bh_correction(result_df["p_value"].values)
 
