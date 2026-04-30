@@ -44,25 +44,22 @@ Smelt/
 
 ### 1. `smelt site` — Site-Level Methylation
 
-Read BISMARK coverage files, classify each cytosine by sequence context (CpG / CHH / CHG), and output per-site methylation ratios.
+Read BISMARK output, classify each cytosine by sequence context (CpG / CHH / CHG), and output per-site methylation ratios.
 
-**Input:**
-- `--input`: BISMARK `*.cov.gz` (columns: `chr pos cov met_pct unmeth meth`)
-- `--fasta`: Reference genome FASTA (optional, for context classification)
-- `--context-file`: Pre-annotated context file from BISMARK (optional, preferred when available)
+**Supported input formats:**
+- `--input`: BISMARK SAM/BAM (`*.bam`, `*.sam`) or `CX_report.txt` from `coverage2cytosine`
+- SAM/BAM: context from XM tag (Z=CpG, H=CHH, X=CHG), strand from alignment flag
+- CX_report.txt: context and strand read directly from file columns
 
 **Processing:**
-- Determine sequence context for each site:
-  - If `--context-file` provided: read context from BISMARK's own output
-  - If `--fasta` provided: extract downstream bases from reference to classify CpG / CHH / CHG
-- CHH/CHG context is strand-specific; orient correctly using BISMARK strand flags (OT/OB)
-- CpG strand merging: by default (`--merge-cpg-strands`), combine counts from both strands for CpG sites; CHH/CHG remain strand-separated. Use `--no-merge-cpg-strands` to disable.
-- Coordinate system: BISMARK output uses 1-based positions. Convert to internal 0-based representation at the I/O boundary.
+- Context and strand come from the input file — no FASTA-based inference
+- CpG dyad merging: by default (`--merge-cpg-strands`), adjacent CpG partners at (N, +) and (N+1, -) are merged into a single dyad at position N with combined counts. CHH/CHG remain strand-separated. Use `--no-merge-cpg-strands` to disable.
+- Coordinate system: BISMARK uses 1-based positions. Convert to internal 0-based representation at the I/O boundary.
 
 **Filtering:**
 - `--min-depth` (default 5): minimum read depth per cytosine
 
-**Output:** TSV — `chr, pos, context, strand, meth, unmeth, total, ratio`
+**Output:** TSV — `chr, pos, context, strand, meth, unmeth, total, ratio, sample`
 
 ---
 
@@ -95,8 +92,8 @@ Calculate methylation levels for genomic features defined in a GTF file.
 
 **Processing:**
 - Read GTF column 3 (feature type). Filter by `--features` (comma-separated, e.g. `exon,CDS,gene`)
-- Merge consecutive rows belonging to the same feature (same `feature_id`) to form contiguous intervals
-- For each feature interval, aggregate site-level methylation per context
+- Each GTF row is processed independently; no feature-level merge is performed
+- For each feature row, aggregate site-level methylation per context
 - GTF uses 1-based closed coordinates; convert internally to 0-based half-open before intersecting with sites
 
 **Output:** TSV — `chr, feature_type, feature_id, context, n_sites, meth, unmeth, ratio`
