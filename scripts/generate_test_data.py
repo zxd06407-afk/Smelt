@@ -77,35 +77,48 @@ def _determine_context(chrom, pos):
 
 
 def generate_cov_files(output_dir):
-    """Generate BISMARK coverage files with embedded DMRs."""
+    """Generate BISMARK coverage files with embedded DMRs.
+
+    All samples share the same cytosine positions (fixed step per chromosome).
+    Variation comes from depth, methylation ratio, and group-specific DMR effects.
+    """
+    # Build shared position list with pre-determined contexts
+    shared_sites = []
+    for chrom, size in CHROM_SIZES.items():
+        step = 100  # fixed step so all samples have sites at identical positions
+        for pos in range(1, size + 1, step):
+            ctx = _determine_context(chrom, pos)
+            shared_sites.append((chrom, pos, ctx))
+    print(f"Shared site template: {len(shared_sites)} positions across all chromosomes")
+
     for group, samples in SAMPLE_GROUPS.items():
         for sample in samples:
             rows = []
-            for chrom, size in CHROM_SIZES.items():
-                step = random.randint(80, 200)
-                for pos in range(1, size + 1, step):
-                    ctx = _determine_context(chrom, pos)
-                    base_ratio = 0.8 if ctx == "CpG" else (0.1 if ctx == "CHH" else 0.05)
-                    depth = random.randint(10, 40)
-                    meth = int(depth * base_ratio)
+            for chrom, pos, ctx in shared_sites:
+                base_ratio = 0.8 if ctx == "CpG" else (0.1 if ctx == "CHH" else 0.05)
+                # Add biological variation: random perturbation around base_ratio
+                base_ratio += random.gauss(0, 0.05)
+                base_ratio = max(0, min(1, base_ratio))
 
-                    # Apply DMR effect for group2 samples
-                    dmr = _is_in_dmr(chrom, pos, ctx)
-                    if dmr and group == "group2":
-                        delta, direction = dmr
-                        if direction == "hyper":
-                            meth += int(depth * delta * 0.8)
-                        else:
-                            meth -= int(depth * delta * 0.8)
-                    meth = max(0, min(depth, meth))
-                    unmet = depth - meth
-                    pct = meth / depth * 100
-                    rows.append(f"{chrom}\t{pos}\t{pos}\t{pct:.1f}\t{unmet}\t{meth}")
+                depth = random.randint(10, 40)
+                meth = int(depth * base_ratio)
+
+                # Apply DMR effect for group2 samples
+                dmr = _is_in_dmr(chrom, pos, ctx)
+                if dmr and group == "group2":
+                    delta, direction = dmr
+                    if direction == "hyper":
+                        meth += int(depth * delta * 0.8)
+                    else:
+                        meth -= int(depth * delta * 0.8)
+                meth = max(0, min(depth, meth))
+                unmet = depth - meth
+                pct = meth / depth * 100
+                rows.append(f"{chrom}\t{pos}\t{pos}\t{pct:.1f}\t{unmet}\t{meth}")
 
             path = output_dir / f"{sample}.cov"
             with open(path, "w") as f:
                 f.write("\n".join(rows))
-            # Gzipped
             gz_path = output_dir / f"{sample}.cov.gz"
             with gzip.open(gz_path, "wt") as f:
                 f.write("\n".join(rows))
