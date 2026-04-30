@@ -39,3 +39,37 @@ def test_compute_metaplot_ratio_between_0_and_1(gene_intervals, site_df):
     result = compute_metaplot(site_df, gene_intervals)
     assert all(result["ratio"] >= 0)
     assert all(result["ratio"] <= 1)
+
+
+def test_compute_metaplot_bin_ratios_uniform():
+    """Uniform input (all ratio=0.8) → all bins have ratio=0.8."""
+    rows = []
+    for pos in range(0, 15000):
+        rows.append({"chr": "chrA", "pos": pos, "context": "CpG",
+                      "strand": "+", "meth": 8, "unmeth": 2,
+                      "total": 10, "ratio": 0.8})
+    site_df = pd.DataFrame(rows)
+    gene_intervals = pd.DataFrame({
+        "chr": ["chrA", "chrA"],
+        "start": [1000, 8000],
+        "end": [3000, 11000],
+        "gene_id": ["gene1", "gene2"],
+        "strand": ["+", "+"],
+    })
+    result = compute_metaplot(site_df, gene_intervals,
+                               body_bins=10, up_bins=5, down_bins=5)
+    assert len(result) > 0
+    for _, row in result.iterrows():
+        assert row["ratio"] == pytest.approx(0.8)
+
+
+def test_compute_metaplot_empty_genes():
+    """Empty gene_intervals → empty result, not crash."""
+    site_df = pd.DataFrame({
+        "chr": ["chrA"], "pos": [100], "context": ["CpG"],
+        "strand": ["+"], "meth": [8], "unmeth": [2],
+        "total": [10], "ratio": [0.8],
+    })
+    empty = pd.DataFrame(columns=["chr", "start", "end", "gene_id", "strand"])
+    result = compute_metaplot(site_df, empty)
+    assert len(result) == 0

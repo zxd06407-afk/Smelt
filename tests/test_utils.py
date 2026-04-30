@@ -115,3 +115,29 @@ def test_merge_cpg_no_strand_column():
     })
     result = merge_cpg_strands(df)
     assert len(result) == 1
+
+
+def test_parallel_consistency():
+    """threads=1 and threads=2 produce identical results."""
+    import pandas as pd
+    from smelt.window import compute_windows
+
+    rows = []
+    for chrom in ["chrA", "chrB"]:
+        for pos in range(0, 5000, 50):
+            rows.append({
+                "chr": chrom, "pos": pos, "context": "CpG",
+                "strand": "+", "meth": 8, "unmeth": 2,
+                "total": 10, "ratio": 0.8,
+            })
+    df = pd.DataFrame(rows)
+    result_1 = compute_windows(df, window_size=2000, step=500, min_sites=5, threads=1)
+    result_2 = compute_windows(df, window_size=2000, step=500, min_sites=5, threads=2)
+    assert len(result_1) == len(result_2)
+    assert set(result_1.columns) == set(result_2.columns)
+    # Sort both for stable comparison
+    cols = ["chr", "start", "end", "context"]
+    r1 = result_1.sort_values(cols).reset_index(drop=True)
+    r2 = result_2.sort_values(cols).reset_index(drop=True)
+    for col in ["n_sites", "meth", "unmeth", "total"]:
+        assert r1[col].tolist() == r2[col].tolist(), f"Mismatch in {col}"

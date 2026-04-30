@@ -1,3 +1,4 @@
+import pandas as pd
 from typer.testing import CliRunner
 from smelt.cli import app
 
@@ -57,9 +58,37 @@ def test_site_without_input_fails():
     assert result.exit_code != 0
 
 
-def test_site_no_fasta_fails():
-    """Without FASTA, context can't be determined - should error."""
+def test_site_unsupported_format():
+    """Unsupported file extension gives a clear error."""
     result = runner.invoke(app, [
-        "site", "--input", "tests/data/sample.cov",
+        "site", "--input", "tests/data/sample.bed",
+    ])
+    assert result.exit_code != 0
+
+
+def test_site_cli_pipeline():
+    """Run site via CLI with CX_report input, verify output file."""
+    import tempfile, os
+    with tempfile.NamedTemporaryFile(suffix=".tsv", delete=False) as f:
+        out_path = f.name
+    try:
+        result = runner.invoke(app, [
+            "site", "--input", "tests/data/test.CX_report.txt",
+            "--sample-name", "test",
+            "-o", out_path,
+        ])
+        assert result.exit_code == 0
+        df = pd.read_csv(out_path, sep="\t")
+        assert len(df) > 0
+        assert "sample" in df.columns
+        assert all(df["sample"] == "test")
+    finally:
+        os.unlink(out_path)
+
+
+def test_cli_error_message():
+    """Nonexistent input gives non-zero exit."""
+    result = runner.invoke(app, [
+        "site", "--input", "nonexistent_file.bam",
     ])
     assert result.exit_code != 0

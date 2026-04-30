@@ -41,6 +41,44 @@ def test_compute_windows_by_context():
 def test_compute_windows_min_sites_filter():
     df = make_site_df()
     result = compute_windows(df, window_size=2000, step=500, min_sites=50)
-    # CpG: ~20 sites per window, CHH: ~10 sites.
-    # With min_sites=50, all windows filtered out
     assert len(result) == 0
+
+
+def test_compute_windows_boundary_precision():
+    """Half-open [start, end): pos=1999 is inside, pos=2000 is outside."""
+    df = pd.DataFrame({
+        "chr": ["chrA", "chrA", "chrA"],
+        "pos": [1999, 2000, 2001],
+        "context": ["CpG", "CpG", "CpG"],
+        "strand": ["+", "+", "+"],
+        "meth": [5, 5, 5],
+        "unmeth": [5, 5, 5],
+        "total": [10, 10, 10],
+        "ratio": [0.5, 0.5, 0.5],
+    })
+    result = compute_windows(df, window_size=2000, step=500, min_sites=1)
+    w0 = result[result["start"] == 0]
+    assert len(w0) == 1
+    assert w0.iloc[0]["n_sites"] == 1  # only pos=1999
+    # pos=2000 and pos=2001 belong to window [2000, 4000)
+    w2000 = result[(result["start"] == 2000) & (result["context"] == "CpG")]
+    assert len(w2000) == 1
+    assert w2000.iloc[0]["n_sites"] == 2  # pos=2000,2001
+
+
+def test_compute_windows_step_overlap():
+    """Site at pos=1500 appears in exactly 4 windows with W=2000, step=500."""
+    df = pd.DataFrame({
+        "chr": ["chrA"],
+        "pos": [1500],
+        "context": ["CpG"],
+        "strand": ["+"],
+        "meth": [5],
+        "unmeth": [5],
+        "total": [10],
+        "ratio": [0.5],
+    })
+    result = compute_windows(df, window_size=2000, step=500, min_sites=1)
+    # Site at 1500 is in windows: [0,2000), [500,2500), [1000,3000), [1500,3500)
+    # NOT in [2000,4000) since 1500 < 2000
+    assert len(result) == 4

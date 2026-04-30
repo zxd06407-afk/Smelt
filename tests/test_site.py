@@ -42,3 +42,27 @@ def test_compute_site_requires_columns():
     df = pd.DataFrame({"chr": ["chrA"], "pos": [0], "meth": [5]})
     with pytest.raises(ValueError, match="missing required columns"):
         compute_site_methylation(df)
+
+
+def test_compute_site_merge_vs_no_merge():
+    """CpG dyad pair: merge combines them, no-merge keeps both."""
+    df = pd.DataFrame({
+        "chr": ["chrA", "chrA"],
+        "pos": [99, 100],
+        "strand": ["+", "-"],
+        "context": ["CpG", "CpG"],
+        "meth": [10, 5],
+        "unmeth": [2, 1],
+        "total": [12, 6],
+        "ratio": [0.833, 0.833],
+    })
+    merged = compute_site_methylation(df, merge_cpg=True)
+    unmerged = compute_site_methylation(df, merge_cpg=False)
+    # Merged: 1 row at pos 99 with combined counts
+    assert len(merged) == 1
+    assert merged.iloc[0]["pos"] == 99
+    assert merged.iloc[0]["meth"] == 15
+    # Unmerged: 2 rows
+    assert len(unmerged) == 2
+    # Total meth preserved
+    assert merged["meth"].sum() == unmerged["meth"].sum()

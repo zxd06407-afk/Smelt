@@ -91,7 +91,7 @@ class TestIntegrationElement:
 
 
 class TestIntegrationDMR:
-    def test_dmr_detects_some_regions(self, all_windows):
+    def test_dmr_output_has_required_columns(self, all_windows):
         dfs = []
         for sample, df in all_windows.items():
             df = df.copy()
@@ -150,3 +150,88 @@ class TestIntegrationStats:
         df = compute_stats(all_sites["sample_1"])
         chromosomes = set(df[df["chr"] != "genome"]["chr"].unique())
         assert chromosomes == {"chrA", "chrB"}
+
+
+EMBEDDED_DMRS = [
+    ("chrA", 10000, 18000, "CpG", 0.7, "hyper"),
+    ("chrA", 30000, 38000, "CpG", 0.5, "hypo"),
+    ("chrA", 50000, 58000, "CpG", 0.4, "hyper"),
+    ("chrA", 70000, 78000, "CpG", 0.3, "hypo"),
+    ("chrA", 90000, 98000, "CpG", 0.2, "hyper"),
+    ("chrB", 10000, 18000, "CHH", 0.6, "hyper"),
+    ("chrB", 30000, 38000, "CHH", 0.5, "hypo"),
+    ("chrB", 50000, 58000, "CHG", 0.5, "hyper"),
+]
+
+
+class TestIntegrationAccuracy:
+    """Ground-truth assertions using 8 embedded DMRs in simulated data."""
+
+    def test_all_eight_dmrs_detected(self, all_windows):
+        """At q<0.05, |delta|>0.15, all 8 embedded DMRs are detected."""
+        dfs = []
+        for sample, df in all_windows.items():
+            df = df.copy()
+            df["sample"] = sample
+            dfs.append(df)
+        merged = pd.concat(dfs, ignore_index=True)
+        groups = {"group1": ["sample_1", "sample_2"],
+                   "group2": ["sample_3", "sample_4"]}
+        dmr_df, _ = call_dmr(merged, groups, group1="group1", group2="group2",
+                              q_threshold=0.05, delta_threshold=0.15)
+        hits = set()
+        for _, dmr in dmr_df.iterrows():
+            for i, ed in enumerate(EMBEDDED_DMRS):
+                if (dmr["chr"] == ed[0] and dmr["context"] == ed[3] and
+                    dmr["start"] < ed[2] and dmr["end"] > ed[1]):
+                    hits.add(i)
+        assert len(hits) >= 8, f"Only {len(hits)}/8 DMRs detected"
+
+    def test_dmr_direction_matches_preset(self, all_windows):
+        """Each detected DMR region has correct hyper/hypo direction."""
+        dfs = []
+        for sample, df in all_windows.items():
+            df = df.copy()
+            df["sample"] = sample
+            dfs.append(df)
+        merged = pd.concat(dfs, ignore_index=True)
+        groups = {"group1": ["sample_1", "sample_2"],
+                   "group2": ["sample_3", "sample_4"]}
+        dmr_df, _ = call_dmr(merged, groups, group1="group1", group2="group2",
+                              q_threshold=0.05, delta_threshold=0.15)
+        for ed in EMBEDDED_DMRS:
+            matches = dmr_df[
+                (dmr_df["chr"] == ed[0]) & (dmr_df["context"] == ed[3]) &
+                (dmr_df["start"] < ed[2]) & (dmr_df["end"] > ed[1])
+            ]
+            if len(matches) > 0:
+                expected_dir = ed[5]
+                assert all(d == expected_dir for d in matches["direction"]), \
+                    f"DMR {ed[0]}:{ed[1]}-{ed[2]} direction mismatch"
+
+    def test_dmr_q_values_below_threshold(self, all_windows):
+        """All detected DMRs have q-value below threshold."""
+        dfs = []
+        for sample, df in all_windows.items():
+            df = df.copy()
+            df["sample"] = sample
+            dfs.append(df)
+        merged = pd.concat(dfs, ignore_index=True)
+        groups = {"group1": ["sample_1", "sample_2"],
+                   "group2": ["sample_3", "sample_4"]}
+        dmr_df, _ = call_dmr(merged, groups, group1="group1", group2="group2",
+                              q_threshold=0.05, delta_threshold=0.15)
+        if len(dmr_df) > 0:
+            assert all(dmr_df["q_value"] < 0.05), "Some DMRs have q >= 0.05"
+
+    def test_stats_genome_weighted(self, all_sites):
+        """Genome row exists and n_sites equals sum of per-chr n_sites."""
+        df = compute_stats(all_sites["sample_1"])
+        genome = df[df["chr"] == "genome"]
+        assert len(genome) > 0
+        per_chr = df[df["chr"] != "genome"]
+        for ctx in genome["context"].unique():
+            g_sites = genome[genome["context"] == ctx]["n_sites"].sum()
+            p_sites = per_chr[per_chr["context"] == ctx]["n_sites"].sum()
+            assert g_sites == pytest.approx(p_sites), \
+                f"Genome n_sites mismatch for {ctx}"
