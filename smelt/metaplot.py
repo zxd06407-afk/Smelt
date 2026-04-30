@@ -13,7 +13,8 @@ def _make_bins(start, end, n_bins):
 
 def compute_metaplot(site_df, gene_intervals, context="CpG",
                       upstream=2000, downstream=2000,
-                      body_bins=50, up_bins=20, down_bins=20):
+                      body_bins=50, up_bins=20, down_bins=20,
+                      sample_name=None):
     """Compute methylation signal across gene bodies and flanking regions.
 
     Args:
@@ -77,8 +78,10 @@ def compute_metaplot(site_df, gene_intervals, context="CpG",
                 })
 
     if not results:
-        return pd.DataFrame(columns=["region", "bin", "ratio"])
-
-    df = pd.DataFrame(results)
-    output = df.groupby(["region", "bin"], as_index=False)["ratio"].mean()
+        output = pd.DataFrame(columns=["region", "bin", "ratio"])
+    else:
+        df = pd.DataFrame(results)
+        output = df.groupby(["region", "bin"], as_index=False)["ratio"].mean()
+    if sample_name is not None:
+        output["sample"] = sample_name
     return output

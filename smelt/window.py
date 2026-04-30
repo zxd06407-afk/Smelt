@@ -57,7 +57,8 @@ def _window_chromosome(chrom_sites, window_size=2000, step=500, min_sites=10):
     return pd.DataFrame(results)
 
 
-def compute_windows(site_df, window_size=2000, step=500, min_sites=10, threads=1):
+def compute_windows(site_df, window_size=2000, step=500, min_sites=10,
+                     sample_name=None, threads=1):
     """Aggregate methylation into fixed-size sliding windows.
 
     Args:
@@ -65,18 +66,22 @@ def compute_windows(site_df, window_size=2000, step=500, min_sites=10, threads=1
         window_size: Window size in bp (default 2000)
         step: Step size in bp (default 500)
         min_sites: Minimum number of cytosines per window per context
+        sample_name: Optional sample identifier added to output
         threads: Number of worker processes for per-chromosome parallelism
 
     Returns:
         DataFrame: chr, start, end, context, n_sites, meth, unmeth, total, ratio
     """
     result = parallel_chromosomes(
+
         site_df, _window_chromosome, threads=threads,
         window_size=window_size, step=step, min_sites=min_sites,
     )
     if result.empty:
-        return pd.DataFrame(columns=[
+        result = pd.DataFrame(columns=[
             "chr", "start", "end", "context",
             "n_sites", "meth", "unmeth", "total", "ratio",
         ])
+    if sample_name is not None:
+        result["sample"] = sample_name
     return result

@@ -71,6 +71,43 @@ def test_merge_cpg_strands_combines_both_strands():
     assert len(cpg) == 2
 
 
+def test_merge_cpg_dyad_adjacent_positions():
+    """CpG at pos 99/+ and pos 100/- merge into dyad at pos 99."""
+    df = pd.DataFrame({
+        "chr": ["chrA", "chrA", "chrA"],
+        "pos": [99, 100, 200],
+        "context": ["CpG", "CpG", "CpG"],
+        "strand": ["+", "-", "+"],
+        "meth": [10, 5, 8],
+        "unmeth": [2, 1, 3],
+        "total": [12, 6, 11],
+        "ratio": [0.833, 0.833, 0.727],
+    })
+    result = merge_cpg_strands(df)
+    dyad = result[result["pos"] == 99]
+    assert len(dyad) == 1
+    assert dyad.iloc[0]["meth"] == 15
+    assert dyad.iloc[0]["unmeth"] == 3
+    lone = result[result["pos"] == 200]
+    assert lone.iloc[0]["meth"] == 8
+
+
+def test_merge_cpg_dyad_non_adjacent_not_merged():
+    """CpG at pos 99/+ and pos 101/- should NOT merge."""
+    df = pd.DataFrame({
+        "chr": ["chrA", "chrA"],
+        "pos": [99, 101],
+        "context": ["CpG", "CpG"],
+        "strand": ["+", "-"],
+        "meth": [10, 5],
+        "unmeth": [2, 1],
+        "total": [12, 6],
+        "ratio": [0.833, 0.833],
+    })
+    result = merge_cpg_strands(df)
+    assert len(result) == 2
+
+
 def test_merge_cpg_no_strand_column():
     df = pd.DataFrame({
         "chr": ["chrA"], "pos": [99], "context": ["CpG"],

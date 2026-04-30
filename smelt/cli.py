@@ -7,7 +7,7 @@ from typing import List, Optional
 import typer
 import pandas as pd
 
-from smelt.io import read_cov, read_gtf, read_bed, read_fasta, read_bismark_sam
+from smelt.io import (read_cx_report, read_gtf, read_bed, read_bismark_sam)
 from smelt.site import compute_site_methylation
 from smelt.window import compute_windows
 from smelt.element import compute_elements
@@ -32,59 +32,89 @@ def _write_output(df: pd.DataFrame, output: Optional[str], default_name: str):
 def _output_base(input_path: str, suffix: str) -> str:
     """Generate output filename from input basename."""
     base = Path(input_path).stem
-    base = base.replace(".cov", "")
     return f"{base}.{suffix}"
+
+
+def _infer_sample_name(input_path: str) -> str:
+    """Infer sample name from input filename."""
+    return Path(input_path).stem
+
+
+def _validate_chromosomes(site_df, annot_df, annot_label):
+    """Check that chromosome names overlap between site and annotation files."""
+    site_chroms = set(site_df["chr"].unique())
+    annot_chroms = set(annot_df["chr"].unique())
+    common = site_chroms & annot_chroms
+    if not common:
+        raise typer.BadParameter(
+            f"No chromosomes in common between site file and {annot_label}.\n"
+            f"  Site file chromosomes: {sorted(site_chroms)}\n"
+            f"  {annot_label} chromosomes: {sorted(annot_chroms)}"
+        )
 
 
 @app.command()
 def site(
-    input_file: str = typer.Option(..., "--input", "-i", help="BISMARK cov.gz, SAM, or BAM file"),
-    fasta: Optional[str] = typer.Option(None, "--fasta", "-f", help="Reference genome FASTA"),
-    context_file: Optional[str] = typer.Option(None, "--context-file", help="Pre-annotated context file"),
+    input_file: str = typer.Option(..., "--input", "-i",
+        help="BISMARK SAM/BAM or CX_report.txt file"),
     min_depth: int = typer.Option(5, "--min-depth", help="Minimum read depth"),
     merge_cpg: bool = typer.Option(True, "--merge-cpg-strands/--no-merge-cpg-strands"),
+    sample_name: Optional[str] = typer.Option(None, "--sample-name",
+        help="Sample identifier (default: inferred from filename)"),
     output: Optional[str] = typer.Option(None, "--output", "-o", help="Output file"),
     threads: int = typer.Option(1, "--threads", "-t", help="Number of threads"),
 ):
     """Compute per-cytosine methylation with sequence context classification."""
     input_lower = input_file.lower()
     if input_lower.endswith((".bam", ".sam")):
-        cov = read_bismark_sam(input_file)
-        if fasta is None:
-            raise typer.BadParameter("--fasta is required for SAM/BAM input")
+        df = read_bismark_sam(input_file)
+    elif "cx_report" in input_lower:
+        df = read_cx_report(input_file)
     else:
-        cov = read_cov(input_file)
-    fa = read_fasta(fasta) if fasta else None
-    ctx = pd.read_csv(context_file, sep="\t") if context_file else None
+        raise typer.BadParameter(
+            "Unsupported input format. Use BISMARK SAM/BAM or CX_report.txt."
+        )
+    name = sample_name if sample_name else _infer_sample_name(input_file)
     result = compute_site_methylation(
-        cov, fasta=fa, context_df=ctx,
-        min_depth=min_depth, merge_cpg=merge_cpg, threads=threads,
+        df, min_depth=min_depth, merge_cpg=merge_cpg,
+        sample_name=name, threads=threads,
     )
-    out = output if output else _output_base(input_file, "site.tsv")
+    out = output if output else f"{name}.site.tsv"
     _write_output(result, out, out)
 
 
 @app.command()
 def window(
-    input_file: str = typer.Option(..., "--input", "-i", help="Site TSV file or BISMARK cov.gz"),
-    fasta: Optional[str] = typer.Option(None, "--fasta", "-f", help="Reference genome FASTA (if input is cov.gz)"),
+    input_file: str = typer.Option(..., "--input", "-i",
+        help="Site TSV file or BISMARK SAM/BAM/CX_report.txt"),
     window_size: int = typer.Option(2000, "--window", "-w", help="Window size in bp"),
     step: int = typer.Option(500, "--step", "-s", help="Step size in bp"),
     min_sites: int = typer.Option(10, "--min-sites", help="Minimum sites per window"),
+    sample_name: Optional[str] = typer.Option(None, "--sample-name",
+        help="Sample identifier (default: inferred from filename)"),
     output: Optional[str] = typer.Option(None, "--output", "-o", help="Output file"),
     threads: int = typer.Option(1, "--threads", "-t", help="Number of threads"),
 ):
     """Aggregate methylation into sliding windows."""
-    df = pd.read_csv(input_file, sep="\t")
+    input_lower = input_file.lower()
+    if input_lower.endswith((".bam", ".sam")):
+        df = read_bismark_sam(input_file)
+    elif "cx_report" in input_lower:
+        df = read_cx_report(input_file)
+    else:
+        df = pd.read_csv(input_file, sep="\t")
+
     if "context" not in df.columns:
-        cov = read_cov(input_file)
-        fa = read_fasta(fasta) if fasta else None
-        if fa is None:
-            raise typer.BadParameter("--fasta required when input is a raw cov.gz file")
-        df = compute_site_methylation(cov, fasta=fa, threads=threads)
-    result = compute_windows(df, window_size=window_size, step=step, min_sites=min_sites, threads=threads)
+        name = sample_name if sample_name else _infer_sample_name(input_file)
+        df = compute_site_methylation(df, min_depth=5, sample_name=name, threads=threads)
+    elif sample_name and "sample" not in df.columns:
+        df["sample"] = sample_name
+
+    result = compute_windows(df, window_size=window_size, step=step,
+                              min_sites=min_sites, threads=threads)
     suffix = f"window{window_size}s{step}.tsv"
-    out = output if output else _output_base(input_file, suffix)
+    name = sample_name if sample_name else _infer_sample_name(input_file)
+    out = output if output else f"{name}.{suffix}"
     _write_output(result, out, out)
 
 
@@ -92,30 +122,39 @@ def window(
 def element(
     input_file: str = typer.Option(..., "--input", "-i", help="Site TSV file"),
     gtf: str = typer.Option(..., "--gtf", "-g", help="GTF annotation file"),
-    features: Optional[str] = typer.Option(None, "--features", help="Feature types (comma-separated, e.g. exon,CDS)"),
+    features: Optional[str] = typer.Option(None, "--features",
+        help="Feature types (comma-separated, e.g. exon,CDS)"),
+    sample_name: Optional[str] = typer.Option(None, "--sample-name",
+        help="Sample identifier (default: inferred from site filename)"),
     output: Optional[str] = typer.Option(None, "--output", "-o", help="Output file"),
     threads: int = typer.Option(1, "--threads", "-t", help="Number of threads"),
 ):
     """Compute methylation levels for GTF feature types."""
     sites = pd.read_csv(input_file, sep="\t")
     gtf_df = read_gtf(gtf)
+    _validate_chromosomes(sites, gtf_df, "GTF file")
     feat_list = features.split(",") if features else None
-    result = compute_elements(sites, gtf_df, features=feat_list)
-    out = output if output else _output_base(input_file, "element.tsv")
+    name = sample_name if sample_name else _infer_sample_name(input_file)
+    result = compute_elements(sites, gtf_df, features=feat_list, sample_name=name)
+    out = output if output else f"{name}.element.tsv"
     _write_output(result, out, out)
 
 
 @app.command()
 def metaplot(
     input_file: str = typer.Option(..., "--input", "-i", help="Site TSV file"),
-    gtf: Optional[str] = typer.Option(None, "--gtf", "-g", help="GTF file for gene intervals"),
-    bed: Optional[str] = typer.Option(None, "--bed", "-b", help="BED file for gene intervals"),
+    gtf: Optional[str] = typer.Option(None, "--gtf", "-g",
+        help="GTF file for gene intervals"),
+    bed: Optional[str] = typer.Option(None, "--bed", "-b",
+        help="BED file for gene intervals"),
     upstream: int = typer.Option(2000, "--upstream", help="Upstream bp"),
     downstream: int = typer.Option(2000, "--downstream", help="Downstream bp"),
     body_bins: int = typer.Option(50, "--body-bins", help="Gene body equal-ratio bins"),
     up_bins: int = typer.Option(20, "--up-bins", help="Upstream bins"),
     down_bins: int = typer.Option(20, "--down-bins", help="Downstream bins"),
     context: str = typer.Option("CpG", "--context", "-c", help="Sequence context"),
+    sample_name: Optional[str] = typer.Option(None, "--sample-name",
+        help="Sample identifier (default: inferred from site filename)"),
     output: Optional[str] = typer.Option(None, "--output", "-o", help="Output file"),
     threads: int = typer.Option(1, "--threads", "-t", help="Number of threads"),
 ):
@@ -128,40 +167,56 @@ def metaplot(
         intervals = read_bed(bed)
     else:
         raise typer.BadParameter("Either --gtf or --bed must be provided")
+    _validate_chromosomes(sites, intervals, "GTF/BED file")
+    name = sample_name if sample_name else _infer_sample_name(input_file)
     result = compute_metaplot(
         sites, intervals, context=context,
         upstream=upstream, downstream=downstream,
         body_bins=body_bins, up_bins=up_bins, down_bins=down_bins,
+        sample_name=name,
     )
-    out = output if output else _output_base(input_file, "metaplot.tsv")
+    out = output if output else f"{name}.metaplot.tsv"
     _write_output(result, out, out)
 
 
 @app.command()
 def custom(
     input_file: str = typer.Option(..., "--input", "-i", help="Site TSV file"),
-    bed: str = typer.Option(..., "--bed", "-b", help="BED file with custom intervals"),
+    bed: str = typer.Option(..., "--bed", "-b",
+        help="BED file with custom intervals"),
+    sample_name: Optional[str] = typer.Option(None, "--sample-name",
+        help="Sample identifier (default: inferred from site filename)"),
     output: Optional[str] = typer.Option(None, "--output", "-o", help="Output file"),
     threads: int = typer.Option(1, "--threads", "-t", help="Number of threads"),
 ):
     """Compute methylation for user-defined BED intervals."""
     sites = pd.read_csv(input_file, sep="\t")
     bed_df = read_bed(bed)
-    result = compute_custom(sites, bed_df)
-    out = output if output else _output_base(input_file, "custom.tsv")
+    _validate_chromosomes(sites, bed_df, "BED file")
+    name = sample_name if sample_name else _infer_sample_name(input_file)
+    result = compute_custom(sites, bed_df, sample_name=name)
+    out = output if output else f"{name}.custom.tsv"
     _write_output(result, out, out)
 
 
 @app.command()
 def dmr(
-    samples: List[str] = typer.Option(..., "--samples", help="Sample definitions: name=file (repeatable)"),
-    group1: str = typer.Option(..., "--group1", help="Comma-separated sample names for group 1"),
-    group2: str = typer.Option(..., "--group2", help="Comma-separated sample names for group 2"),
-    q_threshold: float = typer.Option(0.05, "--q-threshold", help="FDR q-value cutoff"),
-    delta_threshold: float = typer.Option(0.2, "--delta-threshold", help="Minimum methylation difference"),
-    min_samples: int = typer.Option(2, "--min-samples-per-group", help="Minimum samples per group"),
-    fdr_all: bool = typer.Option(False, "--fdr-all-contexts", help="Pool all contexts for BH correction"),
-    output: Optional[str] = typer.Option(None, "--output", "-o", help="Output file"),
+    samples: List[str] = typer.Option(..., "--samples",
+        help="Sample definitions: name=file (repeatable)"),
+    group1: str = typer.Option(..., "--group1",
+        help="Comma-separated sample names for group 1"),
+    group2: str = typer.Option(..., "--group2",
+        help="Comma-separated sample names for group 2"),
+    q_threshold: float = typer.Option(0.05, "--q-threshold",
+        help="FDR q-value cutoff"),
+    delta_threshold: float = typer.Option(0.2, "--delta-threshold",
+        help="Minimum methylation difference"),
+    min_samples: int = typer.Option(2, "--min-samples-per-group",
+        help="Minimum samples per group"),
+    fdr_all: bool = typer.Option(False, "--fdr-all-contexts",
+        help="Pool all contexts for BH correction"),
+    output: Optional[str] = typer.Option(None, "--output", "-o",
+        help="Output file"),
     threads: int = typer.Option(1, "--threads", "-t", help="Number of threads"),
 ):
     """Call differentially methylated regions between two groups."""
@@ -187,8 +242,8 @@ def dmr(
         min_samples_per_group=min_samples, fdr_by_context=not fdr_all,
     )
 
-    base = _output_base(sample_map[g1[0]], "")
-    dmr_out = output if output else f"{base}dmr.tsv"
+    base = Path(sample_map[g1[0]]).stem
+    dmr_out = output if output else f"{base}.dmr.tsv"
     excl_out = dmr_out.replace(".tsv", "_excluded.tsv")
     _write_output(dmr_df, dmr_out, dmr_out)
     _write_output(excl_df, excl_out, excl_out)
@@ -196,14 +251,18 @@ def dmr(
 
 @app.command()
 def stats(
-    input_file: str = typer.Option(..., "--input", "-i", help="Site or window TSV file"),
+    input_file: str = typer.Option(..., "--input", "-i",
+        help="Site or window TSV file"),
+    sample_name: Optional[str] = typer.Option(None, "--sample-name",
+        help="Sample identifier (default: inferred from filename)"),
     output: Optional[str] = typer.Option(None, "--output", "-o", help="Output file"),
     threads: int = typer.Option(1, "--threads", "-t", help="Number of threads"),
 ):
     """Compute genome and chromosome-level methylation statistics."""
     df = pd.read_csv(input_file, sep="\t")
-    result = compute_stats(df)
-    out = output if output else _output_base(input_file, "stats.tsv")
+    name = sample_name if sample_name else _infer_sample_name(input_file)
+    result = compute_stats(df, sample_name=name)
+    out = output if output else f"{name}.stats.tsv"
     _write_output(result, out, out)
 
 

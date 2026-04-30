@@ -10,7 +10,6 @@ Ground truth: 8 DMRs embedded (5 CpG, 2 CHH, 1 CHG).
 """
 
 import random
-import gzip
 import argparse
 from pathlib import Path
 
@@ -97,18 +96,21 @@ def _determine_context(chrom, pos):
         return "CHG"
 
 
-def generate_cov_files(output_dir, shared_sites):
-    """Generate BISMARK coverage files with embedded DMRs.
+def generate_cxreport_files(output_dir, shared_sites):
+    """Generate CX_report.txt files with embedded DMRs.
 
-    All samples share the same cytosine positions (fixed step per chromosome).
-    Variation comes from depth, methylation ratio, and group-specific DMR effects.
+    CX_report format (BISMARK coverage2cytosine, 1-based):
+        chr pos strand meth unmeth context trinucleotide
+
+    All samples share the same cytosine positions.
     """
+
+    ctx_to_bismark = {"CpG": "CG"}
 
     for group, samples in SAMPLE_GROUPS.items():
         for sample in samples:
             rows = []
             for chrom, pos, ctx in shared_sites:
-                # Lower baselines to leave room for both hyper and hypo DMR effects
                 base_ratio = 0.5 if ctx == "CpG" else (0.3 if ctx == "CHH" else 0.3)
                 base_ratio += random.gauss(0, 0.02)
                 base_ratio = max(0.05, min(0.95, base_ratio))
@@ -127,16 +129,18 @@ def generate_cov_files(output_dir, shared_sites):
                     meth = int(depth * dmr_ratio)
                 meth = max(0, min(depth, meth))
                 unmet = depth - meth
-                pct = meth / depth * 100
-                rows.append(f"{chrom}\t{pos}\t{pos}\t{pct:.1f}\t{unmet}\t{meth}")
 
-            path = output_dir / f"{sample}.cov"
+                # Assign strand based on position parity
+                strand = "+" if pos % 2 == 0 else "-"
+                bismark_ctx = ctx_to_bismark.get(ctx, ctx)
+                trinuc = "XXX"
+
+                rows.append(f"{chrom}\t{pos}\t{strand}\t{meth}\t{unmet}\t{bismark_ctx}\t{trinuc}")
+
+            path = output_dir / f"{sample}.CX_report.txt"
             with open(path, "w") as f:
                 f.write("\n".join(rows))
-            gz_path = output_dir / f"{sample}.cov.gz"
-            with gzip.open(gz_path, "wt") as f:
-                f.write("\n".join(rows))
-            print(f"Wrote {path} ({len(rows)} sites) and .gz")
+            print(f"Wrote {path} ({len(rows)} sites)")
 
 
 def generate_gtf(output_dir):
@@ -200,7 +204,7 @@ if __name__ == "__main__":
     shared_sites = _build_shared_sites()
     print(f"Shared site template: {len(shared_sites)} positions across all chromosomes")
     generate_fasta(out, shared_sites)
-    generate_cov_files(out, shared_sites)
+    generate_cxreport_files(out, shared_sites)
     generate_gtf(out)
     generate_bed(out)
     print("Done.")

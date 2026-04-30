@@ -52,9 +52,12 @@ def classify_context(triplet):
 
 
 def merge_cpg_strands(df):
-    """Merge CpG methylation counts from + and - strands.
+    """Merge CpG dyad partners on opposite strands.
 
-    For CpG sites, met/unmet counts are summed across strands.
+    A CpG dyad consists of C on the + strand at position N and C on the
+    - strand at position N+1.  These measure the same methylation event
+    and are merged into one record at position N with combined counts.
+
     CHH and CHG sites pass through unchanged.
 
     Expects columns: chr, pos, context, strand, meth, unmeth, total, ratio.
@@ -62,21 +65,62 @@ def merge_cpg_strands(df):
     import pandas as pd
 
     df = df.copy()
-    if "strand" not in df.columns:
-        df["strand"] = "+"
+    if "strand" not in df.columns or "context" not in df.columns:
+        return df
 
-    cpg = df[df["context"] == "CpG"]
-    non_cpg = df[df["context"] != "CpG"]
+    cpg = df[df["context"] == "CpG"].copy()
+    non_cpg = df[df["context"] != "CpG"].copy()
 
     if cpg.empty:
         return df
 
-    merged = cpg.groupby(["chr", "pos"], as_index=False).agg({
-        "meth": "sum",
-        "unmeth": "sum",
-    })
-    merged["context"] = "CpG"
-    merged["strand"] = "+"
+    cpg_plus = cpg[cpg["strand"] == "+"].copy()
+    cpg_minus = cpg[cpg["strand"] == "-"].copy()
+
+    if cpg_minus.empty:
+        return pd.concat([cpg_plus, non_cpg], ignore_index=True)
+
+    # Build index of minus-strand CpG by (chr, pos-1) for dyad lookup
+    cpg_minus_idx = cpg_minus.set_index(["chr", "pos"])
+    matched_minus_positions = set()
+
+    rows = []
+    for _, plus_row in cpg_plus.iterrows():
+        chrom = plus_row["chr"]
+        pos = plus_row["pos"]
+        # Look for minus-strand partner at pos+1
+        partner_key = (chrom, pos + 1)
+        if partner_key in cpg_minus_idx.index:
+            minus_row = cpg_minus_idx.loc[partner_key]
+            # Handle case where multiple minus rows match
+            if isinstance(minus_row, pd.DataFrame):
+                minus_row = minus_row.iloc[0]
+            rows.append({
+                "chr": chrom, "pos": pos,
+                "context": "CpG", "strand": "+",
+                "meth": plus_row["meth"] + minus_row["meth"],
+                "unmeth": plus_row["unmeth"] + minus_row["unmeth"],
+            })
+            matched_minus_positions.add(partner_key)
+        else:
+            rows.append({
+                "chr": chrom, "pos": pos,
+                "context": "CpG", "strand": "+",
+                "meth": plus_row["meth"],
+                "unmeth": plus_row["unmeth"],
+            })
+
+    # Add unmatched minus-strand CpG sites
+    for idx, minus_row in cpg_minus.iterrows():
+        if (minus_row["chr"], minus_row["pos"]) not in matched_minus_positions:
+            rows.append({
+                "chr": minus_row["chr"], "pos": minus_row["pos"],
+                "context": "CpG", "strand": "+",
+                "meth": minus_row["meth"],
+                "unmeth": minus_row["unmeth"],
+            })
+
+    merged = pd.DataFrame(rows)
     merged["total"] = merged["meth"] + merged["unmeth"]
     merged["ratio"] = merged["meth"] / merged["total"]
 

@@ -35,7 +35,9 @@ def test_compute_stats_per_context(site_df):
 
 def test_compute_stats_n_sites_correct(site_df):
     result = compute_stats(site_df)
-    total_sites = result["n_sites"].sum()
+    # Per-chromosome rows only (exclude genome row)
+    per_chr = result[result["chr"] != "genome"]
+    total_sites = per_chr["n_sites"].sum()
     assert total_sites == len(site_df)
 
 

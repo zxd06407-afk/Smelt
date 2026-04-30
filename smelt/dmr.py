@@ -100,6 +100,7 @@ def call_dmr(window_df, sample_groups, group1, group2,
             excluded.append({
                 "chr": chrom, "start": start, "end": end,
                 "context": context,
+                "category": "low_coverage",
                 "reason": f"insufficient samples: g1={n1}, g2={n2}",
             })
             continue
@@ -109,7 +110,9 @@ def call_dmr(window_df, sample_groups, group1, group2,
         if total1 == 0 and total2 == 0:
             excluded.append({
                 "chr": chrom, "start": start, "end": end,
-                "context": context, "reason": "all zero coverage",
+                "context": context,
+                "category": "all_zero",
+                "reason": "all zero coverage",
             })
             continue
 
@@ -117,7 +120,9 @@ def call_dmr(window_df, sample_groups, group1, group2,
         if np.isnan(p_value):
             excluded.append({
                 "chr": chrom, "start": start, "end": end,
-                "context": context, "reason": "fisher test failed",
+                "context": context,
+                "category": "fisher_failed",
+                "reason": "fisher test failed",
             })
             continue
 
@@ -137,7 +142,7 @@ def call_dmr(window_df, sample_groups, group1, group2,
             "p_value", "q_value", "delta", "direction",
             "ratio_group1", "ratio_group2",
         ])
-        empty_excl = pd.DataFrame(columns=["chr", "start", "end", "context", "reason"])
+        empty_excl = pd.DataFrame(columns=["chr", "start", "end", "context", "category", "reason"])
         return empty_dmr, empty_excl
 
     result_df = pd.DataFrame(results)
@@ -170,6 +175,7 @@ def call_dmr(window_df, sample_groups, group1, group2,
         excluded.append({
             "chr": row["chr"], "start": row["start"],
             "end": row["end"], "context": row["context"],
+            "category": "no_signal",
             "reason": "thresholds not met",
         })
 

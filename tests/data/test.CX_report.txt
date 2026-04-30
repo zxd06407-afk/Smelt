@@ -1,0 +1,6 @@
+chrA	100	+	6	2	CG	CGA
+chrA	101	-	1	1	CG	CGT
+chrA	102	+	5	0	CG	CGG
+chrA	200	+	0	3	CHH	CAC
+chrA	201	-	1	3	CHH	CAT
+chrB	50	+	4	1	CHG	CAG

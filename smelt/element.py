@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 
 
-def compute_elements(site_df, gtf_df, features=None):
+def compute_elements(site_df, gtf_df, features=None, sample_name=None):
     """Compute methylation levels for GTF feature types.
 
     Args:
@@ -11,6 +11,7 @@ def compute_elements(site_df, gtf_df, features=None):
         gtf_df: DataFrame from read_gtf() with 0-based intervals
         features: List of feature types to include (e.g. ["gene", "exon"]).
                   None includes all.
+        sample_name: Optional sample identifier added to output
 
     Returns:
         DataFrame: chr, feature_type, feature_id, context, n_sites, meth, unmeth, ratio
@@ -52,8 +53,12 @@ def compute_elements(site_df, gtf_df, features=None):
             })
 
     if not results:
-        return pd.DataFrame(columns=[
+        result = pd.DataFrame(columns=[
             "chr", "feature_type", "feature_id", "context",
             "n_sites", "meth", "unmeth", "ratio",
         ])
-    return pd.DataFrame(results)
+    else:
+        result = pd.DataFrame(results)
+    if sample_name is not None:
+        result["sample"] = sample_name
+    return result

@@ -3,12 +3,13 @@ import pandas as pd
 import numpy as np
 
 
-def compute_custom(site_df, bed_df):
+def compute_custom(site_df, bed_df, sample_name=None):
     """Compute methylation levels for BED-defined intervals.
 
     Args:
         site_df: DataFrame from compute_site_methylation()
         bed_df: DataFrame from read_bed() with 0-based intervals
+        sample_name: Optional sample identifier added to output
 
     Returns:
         DataFrame: interval_id, chr, start, end, context, n_sites, meth, unmeth, ratio
@@ -49,8 +50,12 @@ def compute_custom(site_df, bed_df):
             })
 
     if not results:
-        return pd.DataFrame(columns=[
+        result = pd.DataFrame(columns=[
             "interval_id", "chr", "start", "end", "context",
             "n_sites", "meth", "unmeth", "ratio",
         ])
-    return pd.DataFrame(results)
+    else:
+        result = pd.DataFrame(results)
+    if sample_name is not None:
+        result["sample"] = sample_name
+    return result
