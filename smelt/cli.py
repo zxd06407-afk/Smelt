@@ -52,7 +52,7 @@ def site(
     ctx = pd.read_csv(context_file, sep="\t") if context_file else None
     result = compute_site_methylation(
         cov, fasta=fa, context_df=ctx,
-        min_depth=min_depth, merge_cpg=merge_cpg,
+        min_depth=min_depth, merge_cpg=merge_cpg, threads=threads,
     )
     out = output if output else _output_base(input_file, "site.tsv")
     _write_output(result, out, out)
@@ -75,8 +75,8 @@ def window(
         fa = read_fasta(fasta) if fasta else None
         if fa is None:
             raise typer.BadParameter("--fasta required when input is a raw cov.gz file")
-        df = compute_site_methylation(cov, fasta=fa)
-    result = compute_windows(df, window_size=window_size, step=step, min_sites=min_sites)
+        df = compute_site_methylation(cov, fasta=fa, threads=threads)
+    result = compute_windows(df, window_size=window_size, step=step, min_sites=min_sites, threads=threads)
     suffix = f"window{window_size}s{step}.tsv"
     out = output if output else _output_base(input_file, suffix)
     _write_output(result, out, out)

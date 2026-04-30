@@ -82,3 +82,43 @@ def merge_cpg_strands(df):
 
     cols = ["chr", "pos", "context", "strand", "meth", "unmeth", "total", "ratio"]
     return pd.concat([merged[cols], non_cpg[cols]], ignore_index=True)
+
+
+def parallel_chromosomes(df, func, threads=1, **kwargs):
+    """Process each chromosome in parallel using multiprocessing.
+
+    Args:
+        df: DataFrame with a 'chr' column.
+        func: Function to apply per chromosome, called as func(chrom_df, **kwargs).
+        threads: Number of worker processes (1 = sequential).
+        **kwargs: Additional arguments passed to func.
+
+    Returns:
+        Concatenated DataFrame of results from all chromosomes.
+    """
+    import pandas as pd
+    from concurrent.futures import ProcessPoolExecutor
+
+    chromosomes = sorted(df["chr"].unique())
+    if threads <= 1 or len(chromosomes) <= 1:
+        results = []
+        for chrom in chromosomes:
+            chrom_df = df[df["chr"] == chrom].copy()
+            results.append(func(chrom_df, **kwargs))
+        if results:
+            return pd.concat(results, ignore_index=True)
+        return pd.DataFrame()
+
+    with ProcessPoolExecutor(max_workers=threads) as executor:
+        futures = {}
+        for chrom in chromosomes:
+            chrom_df = df[df["chr"] == chrom].copy()
+            futures[executor.submit(func, chrom_df, **kwargs)] = chrom
+
+        results = []
+        for future in futures:
+            results.append(future.result())
+
+    if results:
+        return pd.concat(results, ignore_index=True)
+    return pd.DataFrame()
