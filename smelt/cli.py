@@ -7,7 +7,7 @@ from typing import List, Optional
 import typer
 import pandas as pd
 
-from smelt.io import read_cov, read_gtf, read_bed, read_fasta
+from smelt.io import read_cov, read_gtf, read_bed, read_fasta, read_bismark_sam
 from smelt.site import compute_site_methylation
 from smelt.window import compute_windows
 from smelt.element import compute_elements
@@ -38,7 +38,7 @@ def _output_base(input_path: str, suffix: str) -> str:
 
 @app.command()
 def site(
-    input_file: str = typer.Option(..., "--input", "-i", help="BISMARK cov.gz file"),
+    input_file: str = typer.Option(..., "--input", "-i", help="BISMARK cov.gz, SAM, or BAM file"),
     fasta: Optional[str] = typer.Option(None, "--fasta", "-f", help="Reference genome FASTA"),
     context_file: Optional[str] = typer.Option(None, "--context-file", help="Pre-annotated context file"),
     min_depth: int = typer.Option(5, "--min-depth", help="Minimum read depth"),
@@ -47,7 +47,13 @@ def site(
     threads: int = typer.Option(1, "--threads", "-t", help="Number of threads"),
 ):
     """Compute per-cytosine methylation with sequence context classification."""
-    cov = read_cov(input_file)
+    input_lower = input_file.lower()
+    if input_lower.endswith((".bam", ".sam")):
+        cov = read_bismark_sam(input_file)
+        if fasta is None:
+            raise typer.BadParameter("--fasta is required for SAM/BAM input")
+    else:
+        cov = read_cov(input_file)
     fa = read_fasta(fasta) if fasta else None
     ctx = pd.read_csv(context_file, sep="\t") if context_file else None
     result = compute_site_methylation(

@@ -70,3 +70,57 @@ def read_bed(path):
 def read_fasta(path):
     """Open a FASTA file return a pyfaidx.Fasta object for random access."""
     return pyfaidx.Fasta(path)
+
+
+def read_bismark_sam(path):
+    """Read BISMARK SAM/BAM file, extracting per-cytosine methylation counts.
+
+    Parses the XM tag (methylation call string) from each alignment.
+    Uppercase characters (Z/H/X) count as methylated, lowercase (z/h/x) as
+    unmethylated.  Positions with '.' or missing XM are skipped.
+
+    Returns a DataFrame compatible with read_cov() output:
+        chr, pos (0-based), meth, unmeth, total, ratio
+    """
+    import pysam
+    from collections import defaultdict
+
+    mode = "rb" if str(path).endswith(".bam") else "r"
+    counts = defaultdict(lambda: [0, 0])  # (meth, unmeth)
+
+    with pysam.AlignmentFile(str(path), mode) as sam:
+        for read in sam:
+            if read.is_unmapped or read.is_secondary or read.is_supplementary:
+                continue
+            if not read.has_tag("XM"):
+                continue
+
+            xm = read.get_tag("XM")
+            chrom = sam.get_reference_name(read.reference_id)
+            ref_positions = read.get_reference_positions(full_length=True)
+
+            for read_idx, ref_pos in enumerate(ref_positions):
+                if ref_pos is None or read_idx >= len(xm):
+                    continue
+                xm_char = xm[read_idx]
+                if xm_char == ".":
+                    continue
+
+                if xm_char.isupper():
+                    counts[(chrom, ref_pos)][0] += 1
+                elif xm_char.islower():
+                    counts[(chrom, ref_pos)][1] += 1
+
+    rows = []
+    for (chrom, pos), (meth, unmeth) in counts.items():
+        total = meth + unmeth
+        rows.append({
+            "chr": chrom,
+            "pos": pos,  # pysam returns 0-based positions
+            "meth": meth,
+            "unmeth": unmeth,
+            "total": total,
+            "ratio": meth / total if total > 0 else 0.0,
+        })
+
+    return pd.DataFrame(rows, columns=["chr", "pos", "meth", "unmeth", "total", "ratio"])
