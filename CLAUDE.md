@@ -12,9 +12,15 @@ Smelt — WGBS methylation downstream analysis CLI tool. Reads BISMARK output, c
 - **Logging:** structlog
 - **Testing:** pytest
 
-## Design spec
+## Design specs
 
-Full design document at `docs/superpowers/specs/2026-04-29-smelt-design.md`. Read it before any implementation work.
+| Document | Content |
+|----------|---------|
+| `docs/superpowers/specs/2026-04-29-smelt-design.md` | Primary design spec — architecture, subcommands, I/O formats |
+| `docs/superpowers/specs/2026-04-30-review-fixes-design.md` | Input format refactor, CpG dyad merge, sample name, DMR categories |
+| `docs/superpowers/specs/2026-04-30-test-fixes-design.md` | Test suite improvements and coverage targets |
+
+Read the primary spec before any implementation work. The two 2026-04-30 specs document subsequent changes.
 
 ## Commands
 
@@ -23,18 +29,17 @@ Full design document at `docs/superpowers/specs/2026-04-29-smelt-design.md`. Rea
 uv sync                          # Install dependencies
 uv pip install -e .              # Install smelt in editable mode
 
-# Tests
+# Tests (105 total)
 pytest                           # All tests
 pytest tests/test_site.py        # Single module
 pytest -k "test_cpg_merge"       # Single test by name
 
-# Linting (once configured)
-ruff check smelt/ tests/
-mypy smelt/
+# Linting
+uv run ruff check smelt/ tests/
 
 # Run smelt during development
-python -m smelt.cli --help
-python -m smelt.cli site --input data/sample.cov.gz
+uv run smelt --help
+uv run smelt site --input tests/data/test.CX_report.txt --sample-name test
 ```
 
 ## Architecture
@@ -51,7 +56,18 @@ python -m smelt.cli site --input data/sample.cov.gz
 | `dmr.py` | `smelt dmr` | Window-level Fisher + BH, per-context FDR |
 | `stats.py` | `smelt stats` | Genome/chromosome summary by context |
 
-Shared: `io.py` (file I/O), `filter.py` (coverage filtering), `utils.py` (coordinate conversion, context helpers), `cli.py` (Typer entry point).
+Shared: `io.py` (file I/O), `filter.py` (coverage filtering), `utils.py` (coordinate conversion, context helpers, CpG merging, parallel dispatch), `cli.py` (Typer entry point).
+
+## Supported input formats
+
+Only two input formats are accepted (no standalone cov.gz):
+
+| Format | Source | Strand | Context |
+|--------|--------|--------|---------|
+| SAM/BAM | BISMARK alignment | alignment flag | XM tag (Z=CpG, H=CHH, X=CHG) |
+| CX_report.txt | `coverage2cytosine` | column in file | column in file |
+
+`smelt site` auto-detects format by extension (`.bam`/`.sam` vs `CX_report` in filename).
 
 ## Coordinate conventions
 
@@ -59,24 +75,32 @@ Shared: `io.py` (file I/O), `filter.py` (coverage filtering), `utils.py` (coordi
 
 | Input format | Convention | Conversion |
 |-------------|-----------|------------|
-| BISMARK cov.gz | 1-based pos | `pos - 1` |
-| GTF/GFF | 1-based closed | `start-1`, `end` unchanged |
+| CX_report.txt | 1-based pos | `pos - 1` |
+| GTF/GFF | 1-based closed `[start, end]` | `start-1`, `end` unchanged |
 | BED | 0-based half-open | None |
+| SAM/BAM | 0-based (pysam) | None |
 
 Output is always 0-based half-open. Coordinate helpers live in `utils.py`.
 
 ## Key design rules
 
-- **Sequence contexts:** CpG, CHH, CHG. Context determined from FASTA reference or pre-annotated BISMARK context file.
-- **CpG strand merging:** Default on (`--merge-cpg-strands`). CHH/CHG always strand-separated.
-- **Chromosome naming:** Strict exact match. Mismatch → error, not silent data loss.
+- **Sequence contexts:** CpG, CHH, CHG. Context comes from the input file (XM tag or CX_report column) — no FASTA-based inference.
+- **CpG dyad merging:** Default on (`--merge-cpg-strands`). Adjacent CpG partners at (N, +) and (N+1, -) are merged into a single dyad at position N with combined counts. CHH/CHG always strand-separated.
+- **Chromosome naming:** Strict exact match. In `element`, `custom`, `metaplot`: mismatch between site and annotation chromosomes → error.
 - **FDR correction:** Per-context (CpG/CHH/CHG separately). `--fdr-all-contexts` to pool.
-- **Per-chromosome processing:** Default single-threaded, `--threads N` for multi-process.
-- **DMR double threshold:** Both FDR < 0.05 and |delta| > 0.2 required (configurable).
-- **Output naming:** Auto-generated from input basename + parameters, `--output` overrides.
+- **Per-chromosome processing:** Default single-threaded, `--threads N` for multi-process via `ProcessPoolExecutor`.
+- **DMR double threshold:** Both FDR < 0.05 and |delta| > 0.2 required (configurable). Excluded windows get a `category` column: `low_coverage`, `all_zero`, `fisher_failed`, `no_signal`.
+- **Sample name:** `--sample-name` on all single-sample commands (site/window/element/metaplot/custom/stats). Output includes a `sample` column. dmr reads sample names from `--samples` argument.
+- **Output naming:** Auto-generated from input basename + `--sample-name`, `--output` overrides.
 
-## Testing tiers
+## Testing
 
-1. **Unit tests** — constructed minimal data, CI, validate individual functions
-2. **Integration tests** — simulated data (2 fake chr, 4 samples, 8 embedded DMRs), CI < 2 min
-3. **Benchmark** — real public data, cross-tool comparison, manual pre-release
+105 tests across 13 files. Three tiers:
+
+1. **Unit tests** — constructed minimal data, CI. Verify individual functions with precise assertions (exact meth/unmeth counts, p-values, delta values, boundary positions).
+2. **Integration smoke** (`TestIntegration`) — simulated data, validates pipeline runs without crash, columns present, ratio bounds.
+3. **Integration accuracy** (`TestIntegrationAccuracy`) — 8 embedded DMRs with ground truth. Asserts 8/8 detection, correct direction, q-value thresholds, genome weighted mean.
+
+Test data is generated by `scripts/generate_test_data.py` (CX_report.txt format, 2 chromosomes, 4 samples).
+
+Simulated ground truth: 8 DMRs across 3 contexts, deltas from 0.2 to 0.7. At q<0.05, |delta|>0.15: 100% detection rate, 0 false positives.
