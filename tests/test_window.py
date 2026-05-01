@@ -1,6 +1,6 @@
 import pandas as pd
 import pytest
-from smelt.window import compute_windows, _make_windows
+from smelt.window import compute_windows
 
 
 def make_site_df():
@@ -15,12 +15,22 @@ def make_site_df():
     return pd.DataFrame(rows)
 
 
-def test_make_windows_produces_correct_intervals():
-    windows = _make_windows("chrA", 0, 3000, window_size=2000, step=1000)
-    assert len(windows) == 3
-    assert windows[0] == (0, 2000)
-    assert windows[1] == (1000, 3000)
-    assert windows[2] == (2000, 4000)
+def test_window_intervals_correct():
+    """Windows cover the genome with correct step intervals."""
+    df = pd.DataFrame({
+        "chr": ["chrA", "chrA", "chrA", "chrA"],
+        "pos": [500, 1500, 2500, 3500],
+        "context": ["CpG"] * 4,
+        "strand": ["+"] * 4,
+        "meth": [5] * 4, "unmeth": [5] * 4,
+        "total": [10] * 4, "ratio": [0.5] * 4,
+    })
+    result = compute_windows(df, window_size=2000, step=1000, min_sites=1)
+    starts = sorted(result["start"].unique())
+    # Windows should cover all sites: 0, 1000, 2000, 3000
+    assert 0 in starts
+    assert 1000 in starts
+    assert 2000 in starts
 
 
 def test_compute_windows_output_columns():

@@ -141,3 +141,21 @@ def test_parallel_consistency():
     r2 = result_2.sort_values(cols).reset_index(drop=True)
     for col in ["n_sites", "meth", "unmeth", "total"]:
         assert r1[col].tolist() == r2[col].tolist(), f"Mismatch in {col}"
+
+
+def test_parallel_mixed_chromosome_types():
+    """threads=2 works with mixed chr types (int + str like 1,2,Mt,Pt)."""
+    import pandas as pd
+    from smelt.window import compute_windows
+    rows = []
+    for chrom in ["1", "2", "3", "4", "5", "Mt", "Pt"]:
+        for pos in range(0, 2000, 100):
+            rows.append({
+                "chr": chrom, "pos": pos, "context": "CpG",
+                "strand": "+", "meth": 8, "unmeth": 2,
+                "total": 10, "ratio": 0.8,
+            })
+    df = pd.DataFrame(rows)
+    result = compute_windows(df, window_size=1000, step=500, min_sites=3, threads=2)
+    assert len(result) > 0
+    assert set(result["chr"].unique()) == {"1", "2", "3", "4", "5", "Mt", "Pt"}

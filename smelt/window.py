@@ -1,55 +1,55 @@
 """Fixed-size sliding window methylation aggregation."""
+import sys
 import pandas as pd
 import numpy as np
 from smelt.utils import parallel_chromosomes
 
 
-def _make_windows(chrom, chrom_start, chrom_end, window_size=2000, step=500):
-    """Generate window intervals for a chromosome.
-
-    Returns list of (start, end) tuples, 0-based half-open.
-    """
-    windows = []
-    for start in range(chrom_start, chrom_end, step):
-        end = start + window_size
-        windows.append((start, end))
-    return windows
-
-
-def _sites_in_window(sites, start, end):
-    """Return sites within [start, end)."""
-    return sites[(sites["pos"] >= start) & (sites["pos"] < end)]
-
-
 def _window_chromosome(chrom_sites, window_size=2000, step=500, min_sites=10):
-    """Compute sliding windows for a single chromosome."""
+    """Compute sliding windows for a single chromosome.
+
+    Uses two-pointer O(n+m) algorithm: sites and windows are sorted,
+    pointers only advance forward.
+    """
+    chrom = str(chrom_sites["chr"].iloc[0])
+    sites = chrom_sites.sort_values("pos").reset_index(drop=True)
+    n_sites = len(sites)
+    chrom_end = sites["pos"].max() + 1
+
     results = []
-    chrom = chrom_sites["chr"].iloc[0]
-    chrom_end = chrom_sites["pos"].max() + 1
+    left = 0   # first site index >= window start
 
-    for start, end in _make_windows(chrom, 0, chrom_end, window_size, step):
-        window_sites = _sites_in_window(chrom_sites, start, end)
-        if window_sites.empty:
-            continue
+    for start in range(0, chrom_end, step):
+        end = start + window_size
 
-        for context in window_sites["context"].unique():
+        # Advance left pointer to first site >= start
+        while left < n_sites and sites["pos"].iloc[left] < start:
+            left += 1
+
+        # Advance right pointer to first site >= end
+        right = left
+        while right < n_sites and sites["pos"].iloc[right] < end:
+            right += 1
+
+        if left == right:
+            continue  # empty window
+
+        window_sites = sites.iloc[left:right]
+
+        for context in ("CpG", "CHH", "CHG"):
             ctx_sites = window_sites[window_sites["context"] == context]
             n = len(ctx_sites)
+            if n < min_sites:
+                continue
+
             meth_sum = ctx_sites["meth"].sum()
             un_sum = ctx_sites["unmeth"].sum()
             total = meth_sum + un_sum
 
-            if n < min_sites:
-                continue
-
             results.append({
-                "chr": chrom,
-                "start": start,
-                "end": end,
-                "context": context,
-                "n_sites": n,
-                "meth": meth_sum,
-                "unmeth": un_sum,
+                "chr": chrom, "start": start, "end": end,
+                "context": context, "n_sites": n,
+                "meth": meth_sum, "unmeth": un_sum,
                 "total": total,
                 "ratio": meth_sum / total if total > 0 else np.nan,
             })

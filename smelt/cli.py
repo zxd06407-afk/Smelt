@@ -25,6 +25,10 @@ app = typer.Typer(
 def _write_output(df: pd.DataFrame, output: Optional[str], default_name: str):
     """Write DataFrame to TSV, using default_name if no output specified."""
     path = output if output else default_name
+    # Ensure consistent chr column type to avoid DtypeWarning on read
+    if "chr" in df.columns:
+        df = df.copy()
+        df["chr"] = df["chr"].astype(str)
     df.to_csv(path, sep="\t", index=False)
     print(f"Wrote {len(df)} rows to {path}", file=sys.stderr)
 
@@ -240,6 +244,7 @@ def dmr(
         merged, groups, group1="group1", group2="group2",
         q_threshold=q_threshold, delta_threshold=delta_threshold,
         min_samples_per_group=min_samples, fdr_by_context=not fdr_all,
+        threads=threads,
     )
 
     base = Path(sample_map[g1[0]]).stem
