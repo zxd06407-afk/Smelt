@@ -23,14 +23,29 @@ app = typer.Typer(
 
 
 def _write_output(df: pd.DataFrame, output: Optional[str], default_name: str):
-    """Write DataFrame to TSV, using default_name if no output specified."""
+    """Write DataFrame, using default_name if no output specified.
+    Defaults to Parquet for intermediate files; use .parquet suffix for TSV."""
     path = output if output else default_name
-    # Ensure consistent chr column type to avoid DtypeWarning on read
     if "chr" in df.columns:
         df = df.copy()
         df["chr"] = df["chr"].astype(str)
-    df.to_csv(path, sep="\t", index=False)
+    ext = Path(path).suffix.lower()
+    if ext == ".tsv":
+        df.to_csv(path, sep="\t", index=False)
+    else:
+        if not ext:
+            path = path + ".parquet"
+        df.to_parquet(path, index=False)
     print(f"Wrote {len(df)} rows to {path}", file=sys.stderr)
+
+
+def _read_input(path: str) -> pd.DataFrame:
+    """Read a DataFrame from TSV or Parquet based on extension."""
+    ext = Path(path).suffix.lower()
+    if ext == ".parquet":
+        return pd.read_parquet(path)
+    else:
+        return pd.read_csv(path, sep="\t")
 
 
 def _output_base(input_path: str, suffix: str) -> str:
@@ -83,7 +98,7 @@ def site(
         df, min_depth=min_depth, merge_cpg=merge_cpg,
         sample_name=name, threads=threads,
     )
-    out = output if output else f"{name}.site.tsv"
+    out = output if output else f"{name}.site.parquet"
     _write_output(result, out, out)
 
 
@@ -106,7 +121,7 @@ def window(
     elif "cx_report" in input_lower:
         df = read_cx_report(input_file)
     else:
-        df = pd.read_csv(input_file, sep="\t")
+        df = _read_input(input_file)
 
     if "context" not in df.columns:
         name = sample_name if sample_name else _infer_sample_name(input_file)
@@ -116,7 +131,7 @@ def window(
 
     result = compute_windows(df, window_size=window_size, step=step,
                               min_sites=min_sites, threads=threads)
-    suffix = f"window{window_size}s{step}.tsv"
+    suffix = f"window{window_size}s{step}.parquet"
     name = sample_name if sample_name else _infer_sample_name(input_file)
     out = output if output else f"{name}.{suffix}"
     _write_output(result, out, out)
@@ -134,13 +149,13 @@ def element(
     threads: int = typer.Option(1, "--threads", "-t", help="Number of threads"),
 ):
     """Compute methylation levels for GTF feature types."""
-    sites = pd.read_csv(input_file, sep="\t")
+    sites = _read_input(input_file)
     gtf_df = read_gtf(gtf)
     _validate_chromosomes(sites, gtf_df, "GTF file")
     feat_list = features.split(",") if features else None
     name = sample_name if sample_name else _infer_sample_name(input_file)
     result = compute_elements(sites, gtf_df, features=feat_list, sample_name=name)
-    out = output if output else f"{name}.element.tsv"
+    out = output if output else f"{name}.element.parquet"
     _write_output(result, out, out)
 
 
@@ -163,7 +178,7 @@ def metaplot(
     threads: int = typer.Option(1, "--threads", "-t", help="Number of threads"),
 ):
     """Compute metaplot methylation signal across gene bodies and flanking regions."""
-    sites = pd.read_csv(input_file, sep="\t")
+    sites = _read_input(input_file)
     if gtf:
         intervals = read_gtf(gtf)
         intervals = intervals[intervals["feature"] == "gene"]
@@ -179,7 +194,7 @@ def metaplot(
         body_bins=body_bins, up_bins=up_bins, down_bins=down_bins,
         sample_name=name,
     )
-    out = output if output else f"{name}.metaplot.tsv"
+    out = output if output else f"{name}.metaplot.parquet"
     _write_output(result, out, out)
 
 
@@ -194,23 +209,24 @@ def custom(
     threads: int = typer.Option(1, "--threads", "-t", help="Number of threads"),
 ):
     """Compute methylation for user-defined BED intervals."""
-    sites = pd.read_csv(input_file, sep="\t")
+    sites = _read_input(input_file)
     bed_df = read_bed(bed)
     _validate_chromosomes(sites, bed_df, "BED file")
     name = sample_name if sample_name else _infer_sample_name(input_file)
     result = compute_custom(sites, bed_df, sample_name=name)
-    out = output if output else f"{name}.custom.tsv"
+    out = output if output else f"{name}.custom.parquet"
     _write_output(result, out, out)
 
 
 @app.command()
 def dmr(
-    samples: List[str] = typer.Option(..., "--samples",
-        help="Sample definitions: name=file (repeatable)"),
+    samples: Optional[List[str]] = typer.Option(None, "--samples",
+        help="Sample definitions: name=file (repeatable). "
+             "May be omitted if --group1/--group2 contain name=file entries."),
     group1: str = typer.Option(..., "--group1",
-        help="Comma-separated sample names for group 1"),
+        help="Sample names (comma-separated), or name=file entries"),
     group2: str = typer.Option(..., "--group2",
-        help="Comma-separated sample names for group 2"),
+        help="Sample names (comma-separated), or name=file entries"),
     q_threshold: float = typer.Option(0.05, "--q-threshold",
         help="FDR q-value cutoff"),
     delta_threshold: float = typer.Option(0.2, "--delta-threshold",
@@ -223,21 +239,57 @@ def dmr(
         help="Output file"),
     threads: int = typer.Option(1, "--threads", "-t", help="Number of threads"),
 ):
-    """Call differentially methylated regions between two groups."""
+    """Call differentially methylated regions between two groups.
+
+    Two syntaxes are supported:
+
+    \b
+    1. Explicit --samples:
+       smelt dmr --samples a=file1 --samples b=file2 \\
+                 --group1 a --group2 b
+
+    \b
+    2. Inline name=file in group args:
+       smelt dmr --group1 a=file1,b=file2 --group2 c=file3,d=file4
+    """
     sample_map = {}
-    for s in samples:
-        name, path = s.split("=", 1)
-        sample_map[name] = path
+    if samples:
+        for s in samples:
+            name, path = s.split("=", 1)
+            sample_map[name] = path
+    else:
+        for entry in group1.split(","):
+            entry = entry.strip()
+            if "=" in entry:
+                name, path = entry.split("=", 1)
+                sample_map[name.strip()] = path.strip()
+        for entry in group2.split(","):
+            entry = entry.strip()
+            if "=" in entry:
+                name, path = entry.split("=", 1)
+                sample_map[name.strip()] = path.strip()
+    if not sample_map:
+        raise typer.BadParameter(
+            "No sample files specified. Use --samples name=file or "
+            "provide name=file entries in --group1/--group2."
+        )
 
     dfs = []
     for name, path in sample_map.items():
-        df = pd.read_csv(path, sep="\t")
+        df = _read_input(path)
         df["sample"] = name
         dfs.append(df)
     merged = pd.concat(dfs, ignore_index=True)
 
-    g1 = [s.strip() for s in group1.split(",")]
-    g2 = [s.strip() for s in group2.split(",")]
+    # Extract sample names from group args (strip file paths if present)
+    g1 = []
+    for s in group1.split(","):
+        s = s.strip()
+        g1.append(s.split("=")[0].strip() if "=" in s else s)
+    g2 = []
+    for s in group2.split(","):
+        s = s.strip()
+        g2.append(s.split("=")[0].strip() if "=" in s else s)
     groups = {"group1": g1, "group2": g2}
 
     dmr_df, excl_df = call_dmr(
@@ -248,8 +300,8 @@ def dmr(
     )
 
     base = Path(sample_map[g1[0]]).stem
-    dmr_out = output if output else f"{base}.dmr.tsv"
-    excl_out = dmr_out.replace(".tsv", "_excluded.tsv")
+    dmr_out = output if output else f"{base}.dmr.parquet"
+    excl_out = dmr_out.replace(".parquet", "_excluded.parquet")
     _write_output(dmr_df, dmr_out, dmr_out)
     _write_output(excl_df, excl_out, excl_out)
 
@@ -264,10 +316,10 @@ def stats(
     threads: int = typer.Option(1, "--threads", "-t", help="Number of threads"),
 ):
     """Compute genome and chromosome-level methylation statistics."""
-    df = pd.read_csv(input_file, sep="\t")
+    df = _read_input(input_file)
     name = sample_name if sample_name else _infer_sample_name(input_file)
     result = compute_stats(df, sample_name=name)
-    out = output if output else f"{name}.stats.tsv"
+    out = output if output else f"{name}.stats.parquet"
     _write_output(result, out, out)
 
 
