@@ -4,3 +4,14 @@ __pycache__/
 *.egg-info/
 .pytest_cache/
 mini.site.tsv
+benchmark_data/bismark_out/
+benchmark_data/bismark_index/
+benchmark_data/*.fastq.gz
+benchmark_data/*.fa
+benchmark_data/*.fa.gz
+benchmark_data/*.bt2
+benchmark_data/*.bam
+benchmark_data/*.deduplicated*
+benchmark_data/ERR*
+benchmark_data/smelt_out/*.CX_report.txt
+benchmark_data/smelt_out/*.site.tsv
