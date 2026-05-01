@@ -143,7 +143,7 @@ def parallel_chromosomes(df, func, threads=1, **kwargs):
     import pandas as pd
     from concurrent.futures import ProcessPoolExecutor
 
-    chromosomes = sorted(df["chr"].unique())
+    chromosomes = sorted(df["chr"].unique(), key=str)
     if threads <= 1 or len(chromosomes) <= 1:
         results = []
         for chrom in chromosomes:
