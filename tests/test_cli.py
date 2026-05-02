@@ -67,9 +67,9 @@ def test_site_unsupported_format():
 
 
 def test_site_cli_pipeline():
-    """Run site via CLI with CX_report input, verify output file."""
+    """Run site via CLI with CX_report input, verify Parquet output file."""
     import tempfile, os
-    with tempfile.NamedTemporaryFile(suffix=".tsv", delete=False) as f:
+    with tempfile.NamedTemporaryFile(suffix=".parquet", delete=False) as f:
         out_path = f.name
     try:
         result = runner.invoke(app, [
@@ -78,7 +78,7 @@ def test_site_cli_pipeline():
             "-o", out_path,
         ])
         assert result.exit_code == 0
-        df = pd.read_csv(out_path, sep="\t")
+        df = pd.read_parquet(out_path)
         assert len(df) > 0
         assert "sample" in df.columns
         assert all(df["sample"] == "test")

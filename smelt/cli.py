@@ -23,29 +23,17 @@ app = typer.Typer(
 
 
 def _write_output(df: pd.DataFrame, output: Optional[str], default_name: str):
-    """Write DataFrame, using default_name if no output specified.
-    Defaults to Parquet for intermediate files; use .parquet suffix for TSV."""
+    """Write DataFrame in Parquet format, using default_name if no output specified."""
     path = output if output else default_name
-    if "chr" in df.columns:
-        df = df.copy()
-        df["chr"] = df["chr"].astype(str)
-    ext = Path(path).suffix.lower()
-    if ext == ".tsv":
-        df.to_csv(path, sep="\t", index=False)
-    else:
-        if not ext:
-            path = path + ".parquet"
-        df.to_parquet(path, index=False)
+    df.to_parquet(path, index=False)
     print(f"Wrote {len(df)} rows to {path}", file=sys.stderr)
 
 
-def _read_input(path: str) -> pd.DataFrame:
-    """Read a DataFrame from TSV or Parquet based on extension."""
-    ext = Path(path).suffix.lower()
-    if ext == ".parquet":
+def _read_input(path):
+    """Read a Parquet or TSV file (auto-detect)."""
+    if str(path).endswith(".parquet"):
         return pd.read_parquet(path)
-    else:
-        return pd.read_csv(path, sep="\t")
+    return _read_input(path)
 
 
 def _output_base(input_path: str, suffix: str) -> str:
@@ -220,13 +208,12 @@ def custom(
 
 @app.command()
 def dmr(
-    samples: Optional[List[str]] = typer.Option(None, "--samples",
-        help="Sample definitions: name=file (repeatable). "
-             "May be omitted if --group1/--group2 contain name=file entries."),
+    samples: List[str] = typer.Option(..., "--samples",
+        help="Sample definitions: name=file (repeatable)"),
     group1: str = typer.Option(..., "--group1",
-        help="Sample names (comma-separated), or name=file entries"),
+        help="Comma-separated sample names for group 1"),
     group2: str = typer.Option(..., "--group2",
-        help="Sample names (comma-separated), or name=file entries"),
+        help="Comma-separated sample names for group 2"),
     q_threshold: float = typer.Option(0.05, "--q-threshold",
         help="FDR q-value cutoff"),
     delta_threshold: float = typer.Option(0.2, "--delta-threshold",
@@ -239,40 +226,11 @@ def dmr(
         help="Output file"),
     threads: int = typer.Option(1, "--threads", "-t", help="Number of threads"),
 ):
-    """Call differentially methylated regions between two groups.
-
-    Two syntaxes are supported:
-
-    \b
-    1. Explicit --samples:
-       smelt dmr --samples a=file1 --samples b=file2 \\
-                 --group1 a --group2 b
-
-    \b
-    2. Inline name=file in group args:
-       smelt dmr --group1 a=file1,b=file2 --group2 c=file3,d=file4
-    """
+    """Call differentially methylated regions between two groups."""
     sample_map = {}
-    if samples:
-        for s in samples:
-            name, path = s.split("=", 1)
-            sample_map[name] = path
-    else:
-        for entry in group1.split(","):
-            entry = entry.strip()
-            if "=" in entry:
-                name, path = entry.split("=", 1)
-                sample_map[name.strip()] = path.strip()
-        for entry in group2.split(","):
-            entry = entry.strip()
-            if "=" in entry:
-                name, path = entry.split("=", 1)
-                sample_map[name.strip()] = path.strip()
-    if not sample_map:
-        raise typer.BadParameter(
-            "No sample files specified. Use --samples name=file or "
-            "provide name=file entries in --group1/--group2."
-        )
+    for s in samples:
+        name, path = s.split("=", 1)
+        sample_map[name] = path
 
     dfs = []
     for name, path in sample_map.items():
@@ -281,22 +239,14 @@ def dmr(
         dfs.append(df)
     merged = pd.concat(dfs, ignore_index=True)
 
-    # Extract sample names from group args (strip file paths if present)
-    g1 = []
-    for s in group1.split(","):
-        s = s.strip()
-        g1.append(s.split("=")[0].strip() if "=" in s else s)
-    g2 = []
-    for s in group2.split(","):
-        s = s.strip()
-        g2.append(s.split("=")[0].strip() if "=" in s else s)
+    g1 = [s.strip() for s in group1.split(",")]
+    g2 = [s.strip() for s in group2.split(",")]
     groups = {"group1": g1, "group2": g2}
 
     dmr_df, excl_df = call_dmr(
         merged, groups, group1="group1", group2="group2",
         q_threshold=q_threshold, delta_threshold=delta_threshold,
         min_samples_per_group=min_samples, fdr_by_context=not fdr_all,
-        threads=threads,
     )
 
     base = Path(sample_map[g1[0]]).stem
