@@ -1,33 +1,35 @@
 # Smelt
 
-WGBS methylation downstream analysis CLI tool. Reads BISMARK alignment output, computes methylation at sites / sliding windows / genomic elements, performs DMR calling, and generates summary statistics. Outputs TSV for external plotting.
+WGBS methylation downstream analysis CLI tool. Reads BISMARK alignment output, computes methylation at sites / sliding windows / genomic elements, performs DMR calling, and generates summary statistics. Outputs Parquet for external analysis.
 
 ## Installation
 
 ```bash
-git clone <repo-url> && cd Smelt
+git clone https://github.com/zxd06407-afk/Smelt.git && cd Smelt
 uv sync
 uv pip install -e .
 ```
+
+**Requirements:** Python >= 3.10
 
 ## Quickstart
 
 ```bash
 # Site-level methylation from BISMARK BAM
-smelt site --input sample.bam --sample-name tumor1 -o tumor1.site.tsv
+smelt site --input sample.bam --sample-name tumor1 -o tumor1.site.parquet
 
 # Sliding windows (2000bp window, 500bp step)
-smelt window --input tumor1.site.tsv -w 2000 -s 500 -o tumor1.window.tsv
+smelt window --input tumor1.site.parquet -w 2000 -s 500 -o tumor1.window.parquet
 
 # Differential methylation between groups
 smelt dmr \
-  --samples tumor1=tumor1.window.tsv tumor2=tumor2.window.tsv \
-           normal1=normal1.window.tsv normal2=normal2.window.tsv \
+  --samples tumor1=tumor1.window.parquet tumor2=tumor2.window.parquet \
+           normal1=normal1.window.parquet normal2=normal2.window.parquet \
   --group1 tumor1,tumor2 --group2 normal1,normal2 \
-  -o dmr_results.tsv
+  -o dmr_results.parquet
 
 # Genome-wide statistics
-smelt stats --input tumor1.site.tsv
+smelt stats --input tumor1.site.parquet
 ```
 
 ## Supported Input Formats
@@ -53,4 +55,25 @@ See `smelt <command> --help` for detailed options.
 
 ## Output
 
-All outputs are tab-separated TSV files. Per-sample outputs include a `sample` column. See `docs/superpowers/specs/2026-04-29-smelt-design.md` for full output specifications and column descriptions.
+Outputs are Parquet files. Include a `sample` column when `--sample-name` is used.
+Column specifications are in `docs/superpowers/specs/2026-04-29-smelt-design.md`.
+
+## Benchmark Validation
+
+Smelt has been validated against **methylKit** (R/Bioconductor), the gold-standard WGBS differential methylation tool, using Arabidopsis thaliana met1 mutant vs wild-type data:
+
+| Metric | Result |
+|--------|--------|
+| DMR overlap (Jaccard) | 95% across CpG/CHG/CHH |
+| DMR delta correlation | Pearson r = 0.998–1.000 |
+| Window methylation correlation | Pearson r = 0.982 |
+
+Full report: `benchmark_data/BENCHMARK_REPORT.md`
+
+## Citation
+
+Smelt — A WGBS Methylation Downstream Analysis Tool. (2026). https://github.com/zxd06407-afk/Smelt
+
+## License
+
+MIT License. See `LICENSE` for details.
